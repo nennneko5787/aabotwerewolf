@@ -235,7 +235,6 @@ class WerewolfCog(commands.Cog):
                     f"{voteMember.mention} さんが**{count}**票の投票を得たため、処刑します。"
                 )
                 discord.utils.get(Game.members, member=voteMember).dead = True
-                Game.lastDead = voteMember
 
                 for member in Game.members:
                     dmember = member.member

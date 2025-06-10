@@ -94,7 +94,6 @@ class Game:
     knightTarget: Dict[discord.Member, discord.Member] = {}
     votes: Dict[discord.Member, discord.Member] = {}
     force: bool = False
-    lastDead: discord.Member = None
 
     @classmethod
     def reset(cls):
@@ -110,4 +109,3 @@ class Game:
         cls.knightTarget = {}
         cls.votes = {}
         cls.force = False
-        cls.lastDead = None
