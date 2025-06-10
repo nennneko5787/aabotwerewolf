@@ -3,6 +3,7 @@ import enum
 import os
 import random
 from collections import Counter
+from typing import Awaitable
 
 import discord
 import dotenv
@@ -94,7 +95,7 @@ class UserSelect(discord.ui.UserSelect):
 
 
 class UserSelectView(discord.ui.View):
-    def __init__(self, day: int, callback: function = voteCallback):
+    def __init__(self, day: int, callback: Awaitable = voteCallback):
         super().__init__()
         self.add_item(UserSelect(day, callback))
 
@@ -110,9 +111,9 @@ class WerewolfCog(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         self.notificationChannel = self.bot.get_channel(
-            os.getenv("notificationChannel")
+            int(os.getenv("notificationChannel"))
         )
-        self.lobbyChannel = self.bot.get_channel(os.getenv("lobbyChannel"))
+        self.lobbyChannel = self.bot.get_channel(int(os.getenv("lobbyChannel")))
 
     async def moveToRoleVoice(self):
         for member in Game.members:
@@ -193,7 +194,7 @@ class WerewolfCog(commands.Cog):
         match Game.scene:
             case Scene.DAY:
                 Game.seconds = 240
-                while Game.seconds <= 0:
+                while Game.seconds > 0:
                     Game.seconds -= 1
                     await asyncio.sleep(1)
                     if Game.force:
@@ -211,7 +212,7 @@ class WerewolfCog(commands.Cog):
                     view=UserSelectView(Game.days, voteCallback),
                 )
 
-                while Game.seconds <= 0:
+                while Game.seconds > 0:
                     Game.seconds -= 1
                     await asyncio.sleep(1)
                     if Game.force:
@@ -298,7 +299,7 @@ class WerewolfCog(commands.Cog):
                     ),
                 )
 
-                while Game.seconds <= 0:
+                while Game.seconds > 0:
                     Game.seconds -= 1
                     await asyncio.sleep(1)
                     if Game.force:
@@ -342,7 +343,7 @@ class WerewolfCog(commands.Cog):
                     discord.utils.get(Game.members, member=Game.werewolfTarget).dead = (
                         True
                     )
-                    await self.addGhostmember(Game.werewolfTarget)
+                    await self.addGhostMember(Game.werewolfTarget)
 
                 Game.werewolfTarget = None
                 Game.knightTarget = {}
@@ -470,7 +471,7 @@ class WerewolfCog(commands.Cog):
         # 人狼
         Game.channels.append(
             channel := await self.bot.get_channel(
-                1381606390329507992
+                int(os.getenv("category"))
             ).create_voice_channel(
                 name="人狼",
                 overwrites={
@@ -492,7 +493,7 @@ class WerewolfCog(commands.Cog):
         # 幽霊チャンネル
         Game.channels.append(
             channel := await self.bot.get_channel(
-                1381606390329507992
+                int(os.getenv("category"))
             ).create_text_channel(
                 name="霊界",
                 overwrites={
@@ -509,7 +510,7 @@ class WerewolfCog(commands.Cog):
             dmember = member.member
             Game.channels.append(
                 channel := await self.bot.get_channel(
-                    1381606390329507992
+                    int(os.getenv("category"))
                 ).create_voice_channel(
                     name=str(dmember.id),
                     overwrites={
