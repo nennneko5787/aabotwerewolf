@@ -42,9 +42,28 @@ ROLE_TO_TYPE = {
     Role.FOX: RoleType.OTHER,
 }
 
+# 役職 → 名前 の対応表
+ROLE_TO_NAME = {
+    # 村人陣営
+    Role.VILLAGER: "村人",
+    Role.KNIGHT: "騎士",
+    Role.TELLER: "占い師",
+    Role.PSYCHIC: "霊能者",
+    Role.BAKERY: "パン屋",
+    # 人狼陣営
+    Role.WEREWOLF: "人狼",
+    Role.MADMAN: "狂人",
+    # 第三陣営
+    Role.FOX: "妖狐",
+}
+
 
 def getRoleType(role: Role) -> RoleType:
     return ROLE_TO_TYPE[role]
+
+
+def getRoleName(role: Role) -> str:
+    return ROLE_TO_NAME[role]
 
 
 @dataclass(slots=True, weakref_slot=True)
@@ -55,20 +74,34 @@ class Member:
     dead: bool
 
 
+class Scene(enum.Enum):
+    NIGHT = "NIGHT"
+    DAY = "DAY"
+    EVENING = "EVENING"
+
+
 class Game:
     entries: List[discord.Member] = []
     members: List[Member] = []
     channels: List[discord.VoiceChannel] = []
     cast: Dict[Role, int] = {}
-    werewolfTarget: discord.Member = None
-    day: int = 0
+    days: int = 0
     inGame: bool = False
+    scene: Scene = Scene.NIGHT
+    seconds = 0
+    werewolfTarget: discord.Member = None
+    tellerTarget: Dict[discord.Member, discord.Member] = None
+    knightTarget: Dict[discord.Member, discord.Member] = None
 
     @classmethod
     def reset(cls):
         cls.entries = []
         cls.members = []
         cls.channels = []
-        cls.day = 0
-        cls.werewolfTarget = None
+        cls.days = 0
         cls.inGame = False
+        cls.scene = Scene.NIGHT
+        cls.seconds = 0
+        cls.werewolfTarget = None
+        cls.tellerTarget = None
+        cls.knightTarget = None
