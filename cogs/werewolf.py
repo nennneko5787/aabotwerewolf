@@ -2,6 +2,7 @@ import asyncio
 import enum
 import os
 import random
+from collections import Counter
 
 import discord
 import dotenv
@@ -22,6 +23,7 @@ dotenv.load_dotenv()
 
 
 class EndType(enum.Enum):
+    FORCE = "FORCE"
     NOTEND = "NOTEND"
     WONWOLFS = "WONWOLF"
     WONVILAGGERS = "WONVILAGGERS"
@@ -29,10 +31,72 @@ class EndType(enum.Enum):
 
 
 ENDCHAR = {
+    EndType.FORCE: "強制終了しました",
     EndType.WONWOLFS: "村人が全滅したため、人狼の勝利！",
     EndType.WONVILAGGERS: "人狼が全滅したため、村人の勝利！",
     EndType.WONFOX: "妖狐が生き残っていたため、妖狐の勝利！",
 }
+
+
+async def voteCallback(interaction: discord.Interaction, to: discord.Member):
+    if to == interaction.user:
+        return await interaction.response.send_message(f"人狼は殺れません")
+    Game.votes[interaction.user] = to
+    await interaction.response.send_message(
+        f"{to.mention} に投票しました。", ephemeral=True
+    )
+
+
+async def tellerCallback(interaction: discord.Interaction, to: discord.Member):
+    if to == interaction.user:
+        return await interaction.response.send_message(f"人狼は殺れません")
+    Game.tellerTarget[interaction.user] = to
+    await interaction.response.send_message(f"占う人を {to.mention} にしました。")
+
+
+async def knightCallback(interaction: discord.Interaction, to: discord.Member):
+    if to == interaction.user:
+        return await interaction.response.send_message(f"人狼は殺れません")
+    Game.knightTarget[interaction.user] = to
+    await interaction.response.send_message(f"守る人を {to.mention} にしました。")
+
+
+async def werewolfCallback(interaction: discord.Interaction, to: discord.Member):
+    if discord.utils.get(Game.members, member=to).role == Role.WEREWOLF:
+        return await interaction.response.send_message(f"人狼は殺れません")
+    Game.werewolfTarget = to
+    await interaction.response.send_message(f"{to.mention} を殺ります")
+
+
+class UserSelect(discord.ui.UserSelect):
+    def __init__(
+        self,
+        day: int,
+        callback: function,
+    ):
+        options = [member.member for member in Game.members]
+        self.day = day
+        self.selectCallback = callback
+
+        super().__init__(
+            placeholder="ユーザーを選んでください。",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if Game.days != self.day:
+            return await interaction.response.send_message(
+                "今日のパネルではありません", ephemeral=True
+            )
+        await self.selectCallback(interaction, self.values[0])
+
+
+class UserSelectView(discord.ui.View):
+    def __init__(self, day: int, callback: function = voteCallback):
+        super().__init__()
+        self.add_item(UserSelect(day, callback))
 
 
 class WerewolfCog(commands.Cog):
@@ -97,7 +161,7 @@ class WerewolfCog(commands.Cog):
         await self.notificationChannel.send(
             "\n".join(
                 [
-                    f"{member.member.mention} - {getRoleName(member.role)}"
+                    f"- {member.member.mention} -> {getRoleName(member.role)}"
                     for member in Game.members
                 ]
             )
@@ -110,7 +174,7 @@ class WerewolfCog(commands.Cog):
         await self.lobbyChannel.edit(
             overwrites={
                 self.lobbyChannel.guild.default_role: discord.PermissionOverwrite(
-                    view_channel=False
+                    view_channel=True
                 ),
             }
         )
@@ -119,18 +183,118 @@ class WerewolfCog(commands.Cog):
 
     async def game(self):
         match Game.scene:
+            case Scene.DAY:
+                Game.seconds = 240
+                while Game.seconds <= 0:
+                    Game.seconds -= 1
+                    await asyncio.sleep(1)
+                    if Game.force:
+                        return await self.end(EndType.FORCE)
+                Game.scene = Scene.EVENING
+                await self.game()
+            case Scene.EVENING:
+                Game.seconds = 60
+
+                for member in Game.members:
+                    Game.votes[member] = None
+
+                await self.notificationChannel.send(
+                    "夕方になりました。投票を開始してください。",
+                    view=UserSelectView(Game.days, voteCallback),
+                )
+
+                while Game.seconds <= 0:
+                    Game.seconds -= 1
+                    await asyncio.sleep(1)
+                    if Game.force:
+                        return await self.end(EndType.FORCE)
+
+                v = Game.votes.copy()
+                for m in v.keys():
+                    if Game.votes[m] is None:
+                        Game.votes[m] = random.choice(
+                            [
+                                member.member
+                                for member in Game.members
+                                if member.member != m
+                            ]
+                        )
+
+                await self.notificationChannel.send(
+                    "\n".join(
+                        [
+                            f"- {member.mention} -> {to.mention}"
+                            for member, to in Game.votes.items()
+                        ]
+                    )
+                    + "\n-# 選ばなかったユーザーはランダム投票になります"
+                )
+                valueCounts = Counter(Game.votes.values())
+                voteMember, count = valueCounts.most_common(1)[0]
+                await self.notificationChannel.send(
+                    f"{voteMember.mention} さんが**{count}**票の投票を得たため、処刑します。"
+                )
+                discord.utils.get(Game.members, member=voteMember).dead = True
+                Game.lastDead = voteMember
+
+                for member in Game.members:
+                    dmember = member.member
+                    if member.role == Role.PSYCHIC:
+                        await discord.utils.get(
+                            Game.channels, name=str(dmember.id)
+                        ).send(
+                            f"{voteMember.mention} さんは**{getRoleName(discord.utils.get(Game.members, member=voteMember).role)}**",
+                            view=UserSelectView(Game.days, tellerCallback),
+                        )
+
+                endType = self.ifEnd()
+                if endType != EndType.NOTEND:
+                    return await self.end(endType)
+
+                self.moveToRoleVoice()
+                Game.scene = Scene.NIGHT
+                await self.game()
             case Scene.NIGHT:
                 Game.seconds = 120
 
                 # 自分のボイスチャンネルor人狼ボイスチャンネルに移動
                 await self.moveToRoleVoice()
 
+                for member in Game.members:
+                    dmember = member.member
+                    if member.role == Role.WEREWOLF:
+                        continue
+
+                    match member.role:
+                        case Role.TELLER:
+                            await discord.utils.get(
+                                Game.channels, name=str(dmember.id)
+                            ).send(
+                                "占うユーザーを選択してください。",
+                                view=UserSelectView(Game.days, tellerCallback),
+                            )
+                        case Role.KNIGHT:
+                            await discord.utils.get(
+                                Game.channels, name=str(dmember.id)
+                            ).send(
+                                "守るユーザーを選択してください。",
+                                view=UserSelectView(Game.days, knightCallback),
+                            )
+
                 await self.werewolfChannel.send(
-                    f"夜になりました。仲間と話し合って、村人を一人噛み殺してください。{'(初日は誰も噛み殺せません)' if Game.days == 0 else ''}"
+                    f"夜になりました。仲間と話し合って、村人を一人噛み殺してください。{'(初日は誰も噛み殺せません)' if Game.days == 0 else ''}",
+                    view=(
+                        UserSelectView(Game.days, werewolfCallback)
+                        if Game.days != 0
+                        else None
+                    ),
                 )
+
                 while Game.seconds <= 0:
                     Game.seconds -= 1
                     await asyncio.sleep(1)
+                    if Game.force:
+                        return await self.end(EndType.FORCE)
 
                 # 人狼がターゲットを選択しなかった場合
                 if not Game.werewolfTarget:
@@ -171,9 +335,15 @@ class WerewolfCog(commands.Cog):
                         True
                     )
 
-                if endType := self.ifEnd() != EndType.NOTEND:
-                    await self.end(endType)
+                Game.werewolfTarget = None
+                Game.knightTarget = {}
+                Game.tellerTarget = {}
 
+                endType = self.ifEnd()
+                if endType != EndType.NOTEND:
+                    return await self.end(endType)
+
+                self.moveToLobby()
                 Game.scene = Scene.DAY
                 await self.game()
 
@@ -256,9 +426,7 @@ class WerewolfCog(commands.Cog):
             return
 
         # 役職の数が多すぎたとき
-        mCount = 0
-        for count in Game.cast.items():
-            mCount += count
+        mCount = sum(Game.cast.values())
 
         if mCount > len(Game.entries):
             return await interaction.response.send_message(

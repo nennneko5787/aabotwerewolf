@@ -90,8 +90,11 @@ class Game:
     scene: Scene = Scene.NIGHT
     seconds = 0
     werewolfTarget: discord.Member = None
-    tellerTarget: Dict[discord.Member, discord.Member] = None
-    knightTarget: Dict[discord.Member, discord.Member] = None
+    tellerTarget: Dict[discord.Member, discord.Member] = {}
+    knightTarget: Dict[discord.Member, discord.Member] = {}
+    votes: Dict[discord.Member, discord.Member] = {}
+    force: bool = False
+    lastDead: discord.Member = None
 
     @classmethod
     def reset(cls):
@@ -103,5 +106,8 @@ class Game:
         cls.scene = Scene.NIGHT
         cls.seconds = 0
         cls.werewolfTarget = None
-        cls.tellerTarget = None
-        cls.knightTarget = None
+        cls.tellerTarget = {}
+        cls.knightTarget = {}
+        cls.votes = {}
+        cls.force = False
+        cls.lastDead = None
