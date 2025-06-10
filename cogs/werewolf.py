@@ -105,6 +105,7 @@ class WerewolfCog(commands.Cog):
         self.notificationChannel: discord.VoiceChannel = None
         self.lobbyChannel: discord.VoiceChannel = None
         self.werewolfChannel: discord.VoiceChannel = None
+        self.ghostChannel: discord.TextChannel = None
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -130,6 +131,13 @@ class WerewolfCog(commands.Cog):
             await dmember.move_to(self.lobbyChannel)
             if member.dead:
                 await dmember.edit(mute=True)
+
+    async def addGhostMember(self, member: discord.Member):
+        overwrites = self.ghostChannel.overwrites
+        overwrites.update(
+            {member: discord.Permissions(view_channel=True, send_messages=True)}
+        )
+        await self.ghostChannel.edit(overwrites=overwrites)
 
     def ifEnd(self):
         werewolf = len(
@@ -174,7 +182,7 @@ class WerewolfCog(commands.Cog):
         await self.lobbyChannel.edit(
             overwrites={
                 self.lobbyChannel.guild.default_role: discord.PermissionOverwrite(
-                    view_channel=True
+                    view_channel=True, connect=True, speak=True
                 ),
             }
         )
@@ -235,6 +243,7 @@ class WerewolfCog(commands.Cog):
                     f"{voteMember.mention} さんが**{count}**票の投票を得たため、処刑します。"
                 )
                 discord.utils.get(Game.members, member=voteMember).dead = True
+                await self.addGhostMember(voteMember)
 
                 for member in Game.members:
                     dmember = member.member
@@ -333,6 +342,7 @@ class WerewolfCog(commands.Cog):
                     discord.utils.get(Game.members, member=Game.werewolfTarget).dead = (
                         True
                     )
+                    await self.addGhostmember(Game.werewolfTarget)
 
                 Game.werewolfTarget = None
                 Game.knightTarget = {}
@@ -451,7 +461,7 @@ class WerewolfCog(commands.Cog):
             }
             + {
                 member.member: discord.PermissionOverwrite(
-                    view_channel=True, connect=True, speak=True
+                    view_channel=True, connect=True, speak=True, send_messages=True
                 )
                 for member in Game.members
             },
@@ -470,7 +480,7 @@ class WerewolfCog(commands.Cog):
                 }
                 + {
                     member.member: discord.PermissionOverwrite(
-                        view_channel=True, connect=True, speak=True
+                        view_channel=True, connect=True, speak=True, send_messages=True
                     )
                     for member in Game.members
                     if member.role == Role.WEREWOLF
@@ -481,7 +491,9 @@ class WerewolfCog(commands.Cog):
 
         # 幽霊チャンネル
         Game.channels.append(
-            await self.bot.get_channel(1381606390329507992).create_text_channel(
+            channel := await self.bot.get_channel(
+                1381606390329507992
+            ).create_text_channel(
                 name="霊界",
                 overwrites={
                     interaction.guild.default_role: discord.PermissionOverwrite(
@@ -490,6 +502,7 @@ class WerewolfCog(commands.Cog):
                 },
             )
         )
+        self.ghostChannel = channel
 
         # 各ユーザーのチャンネル
         for member in Game.members:
