@@ -133,6 +133,7 @@ class WerewolfCog(commands.Cog):
         self.ghostChannel: discord.TextChannel = None
         self.category: discord.CategoryChannel = None
         self.countMessage: discord.Message = None
+        self.adminRole: discord.Role = None
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -141,6 +142,8 @@ class WerewolfCog(commands.Cog):
         )
         self.lobbyChannel = self.bot.get_channel(int(os.getenv("lobbyChannel")))
         self.category = self.bot.get_channel(int(os.getenv("category")))
+
+        self.adminRole = self.lobbyChannel.guild.get_role(int(os.getenv("adminRole")))
 
         for member in self.lobbyChannel.members:
             Game.entries.append(member)
@@ -235,6 +238,7 @@ class WerewolfCog(commands.Cog):
         self.werewolfChannel = None
         self.ghostChannel = None
 
+        await self.adminRole.edit(permissions=discord.Permissions(administrator=True))
         Game.reset()
 
     async def game(self):
@@ -581,6 +585,8 @@ class WerewolfCog(commands.Cog):
             )
 
         await interaction.response.send_message("ok", ephemeral=True)
+
+        await self.adminRole.edit(permissions=discord.Permissions.none())
 
         # 役職決め
         for role, count in Game.cast.items():
