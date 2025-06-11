@@ -246,6 +246,21 @@ class WerewolfCog(commands.Cog):
             case Scene.DAY:
                 Game.seconds = 240
                 await self.moveToLobby()
+
+                if (
+                    len(
+                        [
+                            member.member
+                            for member in Game.members
+                            if member.role == Role.BAKERY and not member.dead
+                        ]
+                    )
+                    > 0
+                ):
+                    await self.notificationChannel.send(
+                        "パン屋が美味しいパンを焼いてくれました！"
+                    )
+
                 self.countMessage = await self.notificationChannel.send(
                     f"昼が終わるまで: 残り{Game.seconds}秒"
                 )
