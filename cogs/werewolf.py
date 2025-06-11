@@ -2,8 +2,9 @@ import asyncio
 import enum
 import os
 import random
+import traceback
 from collections import Counter
-from typing import Awaitable
+from typing import Awaitable, Callable, List
 
 import discord
 import dotenv
@@ -69,14 +70,24 @@ async def werewolfCallback(interaction: discord.Interaction, to: discord.Member)
     await interaction.response.send_message(f"{to.mention} を殺ります")
 
 
-class UserSelect(discord.ui.UserSelect):
+class UserSelect(discord.ui.Select):
     def __init__(
         self,
         day: int,
-        callback: function,
+        scene: Scene,
+        callback: Callable[[discord.Interaction, discord.Member], Awaitable[None]],
+        options: List[discord.SelectOption] = None,
     ):
-        options = [member.member for member in Game.members]
+        options = options or [
+            discord.SelectOption(
+                label=member.member.display_name,
+                value=member.member.id,
+                description="このユーザーを選びます",
+            )
+            for member in Game.members
+        ]
         self.day = day
+        self.scene = scene
         self.selectCallback = callback
 
         super().__init__(
@@ -91,13 +102,26 @@ class UserSelect(discord.ui.UserSelect):
             return await interaction.response.send_message(
                 "今日のパネルではありません", ephemeral=True
             )
-        await self.selectCallback(interaction, self.values[0])
+        if Game.scene != self.scene:
+            return await interaction.response.send_message(
+                "今のパネルではありません", ephemeral=True
+            )
+        to = discord.utils.get(interaction.guild.members, id=int(self.values[0]))
+        await self.selectCallback(interaction, to)
 
 
 class UserSelectView(discord.ui.View):
-    def __init__(self, day: int, callback: Awaitable = voteCallback):
+    def __init__(
+        self,
+        day: int,
+        scene: Scene,
+        callback: Callable[
+            [discord.Interaction, discord.Member], Awaitable[None]
+        ] = voteCallback,
+        options: List[discord.SelectOption] = None,
+    ):
         super().__init__()
-        self.add_item(UserSelect(day, callback))
+        self.add_item(UserSelect(day, scene, callback, options))
 
 
 class WerewolfCog(commands.Cog):
@@ -107,6 +131,7 @@ class WerewolfCog(commands.Cog):
         self.lobbyChannel: discord.VoiceChannel = None
         self.werewolfChannel: discord.VoiceChannel = None
         self.ghostChannel: discord.TextChannel = None
+        self.category: discord.CategoryChannel = None
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -114,24 +139,30 @@ class WerewolfCog(commands.Cog):
             int(os.getenv("notificationChannel"))
         )
         self.lobbyChannel = self.bot.get_channel(int(os.getenv("lobbyChannel")))
+        self.category = self.bot.get_channel(int(os.getenv("category")))
 
     async def moveToRoleVoice(self):
         for member in Game.members:
-            dmember = member.member
-            if member.role == Role.WEREWOLF:
-                await dmember.move_to(discord.utils.get(Game.channels, name="人狼"))
-            else:
-                await dmember.move_to(
-                    discord.utils.get(Game.channels, name=str(dmember.id))
-                )
-            await dmember.edit(mute=False)
+            try:
+                dmember = member.member
+                if member.role == Role.WEREWOLF:
+                    await dmember.move_to(discord.utils.get(Game.channels, name="人狼"))
+                else:
+                    await dmember.move_to(
+                        discord.utils.get(Game.channels, name=str(dmember.id))
+                    )
+            except Exception as e:
+                traceback.print_exc()
+                await self.notificationChannel.send(f"エラーが発生しました: {e}")
 
     async def moveToLobby(self):
         for member in Game.members:
-            dmember = member.member
-            await dmember.move_to(self.lobbyChannel)
-            if member.dead:
-                await dmember.edit(mute=True)
+            try:
+                dmember = member.member
+                await dmember.move_to(self.lobbyChannel)
+            except Exception as e:
+                traceback.print_exc()
+                await self.notificationChannel.send(f"エラーが発生しました: {e}")
 
     async def addGhostMember(self, member: discord.Member):
         overwrites = self.ghostChannel.overwrites
@@ -139,15 +170,20 @@ class WerewolfCog(commands.Cog):
             {member: discord.Permissions(view_channel=True, send_messages=True)}
         )
         await self.ghostChannel.edit(overwrites=overwrites)
+        try:
+            await member.edit(mute=True)
+        except Exception as e:
+            traceback.print_exc()
+            await self.notificationChannel.send(f"エラーが発生しました: {e}")
 
     def ifEnd(self):
         werewolf = len(
-            [member for member in Game.members if member.role == Role.WEREWOLF]
+            [m for m in Game.members if m.role == Role.WEREWOLF and not m.dead]
         )
         villagers = len(
-            [member for member in Game.members if member.roleType == RoleType.VILLAGER]
+            [m for m in Game.members if m.roleType == RoleType.VILLAGER and not m.dead]
         )
-        foxies = len([member for member in Game.members if member.role == Role.FOX])
+        foxies = len([m for m in Game.members if m.role == Role.FOX and not m.dead])
 
         # 村人の勝利か・妖狐の勝利か
         if werewolf == 0:
@@ -176,9 +212,10 @@ class WerewolfCog(commands.Cog):
             )
         )
 
-        for channel in Game.channels:
-            await channel.delete()
-        self.werewolfChannel = None
+        for member in Game.members:
+            dmember = member.member
+            if dmember.voice and dmember.voice.mute:
+                await dmember.edit(mute=False)
 
         await self.lobbyChannel.edit(
             overwrites={
@@ -187,6 +224,11 @@ class WerewolfCog(commands.Cog):
                 ),
             }
         )
+
+        for channel in Game.channels:
+            await channel.delete()
+        self.werewolfChannel = None
+        self.ghostChannel = None
 
         Game.reset()
 
@@ -205,11 +247,25 @@ class WerewolfCog(commands.Cog):
                 Game.seconds = 60
 
                 for member in Game.members:
-                    Game.votes[member] = None
+                    if not member.dead:
+                        Game.votes[member.member] = None
 
                 await self.notificationChannel.send(
                     "夕方になりました。投票を開始してください。",
-                    view=UserSelectView(Game.days, voteCallback),
+                    view=UserSelectView(
+                        Game.days,
+                        Game.scene,
+                        voteCallback,
+                        [
+                            discord.SelectOption(
+                                label=member.member.display_name,
+                                value=member.member.id,
+                                description="このユーザーに投票します",
+                            )
+                            for member in Game.members
+                            if not member.dead
+                        ],
+                    ),
                 )
 
                 while Game.seconds > 0:
@@ -239,9 +295,24 @@ class WerewolfCog(commands.Cog):
                     + "\n-# 選ばなかったユーザーはランダム投票になります"
                 )
                 valueCounts = Counter(Game.votes.values())
-                voteMember, count = valueCounts.most_common(1)[0]
+                mostCommon = valueCounts.most_common()
+
+                if len(mostCommon) > 1 and mostCommon[0][1] == mostCommon[1][1]:
+                    voteMember = random.choice(
+                        [
+                            member
+                            for member, cnt in mostCommon
+                            if cnt == mostCommon[0][1]
+                        ]
+                    )
+                    char = "\n-# ※全て同数だったためランダム投票となります"
+                else:
+                    voteMember, count = mostCommon[0]
+                    char = ""
+
                 await self.notificationChannel.send(
                     f"{voteMember.mention} さんが**{count}**票の投票を得たため、処刑します。"
+                    + char
                 )
                 discord.utils.get(Game.members, member=voteMember).dead = True
                 await self.addGhostMember(voteMember)
@@ -252,15 +323,14 @@ class WerewolfCog(commands.Cog):
                         await discord.utils.get(
                             Game.channels, name=str(dmember.id)
                         ).send(
-                            f"{voteMember.mention} さんは**{getRoleName(discord.utils.get(Game.members, member=voteMember).role)}**",
-                            view=UserSelectView(Game.days, tellerCallback),
+                            f"{voteMember.mention} さんは**{getRoleName(discord.utils.get(Game.members, member=voteMember).role)}**desita",
                         )
 
                 endType = self.ifEnd()
                 if endType != EndType.NOTEND:
                     return await self.end(endType)
 
-                self.moveToRoleVoice()
+                await self.moveToRoleVoice()
                 Game.scene = Scene.NIGHT
                 await self.game()
             case Scene.NIGHT:
@@ -280,20 +350,59 @@ class WerewolfCog(commands.Cog):
                                 Game.channels, name=str(dmember.id)
                             ).send(
                                 "占うユーザーを選択してください。",
-                                view=UserSelectView(Game.days, tellerCallback),
+                                view=UserSelectView(
+                                    Game.days,
+                                    Game.scene,
+                                    tellerCallback,
+                                    [
+                                        discord.SelectOption(
+                                            label=member.member.display_name,
+                                            value=member.member.id,
+                                            description="このユーザーを占います",
+                                        )
+                                        for member in Game.members
+                                        if member.member != dmember and not member.dead
+                                    ],
+                                ),
                             )
                         case Role.KNIGHT:
                             await discord.utils.get(
                                 Game.channels, name=str(dmember.id)
                             ).send(
                                 "守るユーザーを選択してください。",
-                                view=UserSelectView(Game.days, knightCallback),
+                                view=UserSelectView(
+                                    Game.days,
+                                    Game.scene,
+                                    knightCallback,
+                                    [
+                                        discord.SelectOption(
+                                            label=member.member.display_name,
+                                            value=member.member.id,
+                                            description="このユーザーを守ります",
+                                        )
+                                        for member in Game.members
+                                        if member.member != dmember and not member.dead
+                                    ],
+                                ),
                             )
 
                 await self.werewolfChannel.send(
                     f"夜になりました。仲間と話し合って、村人を一人噛み殺してください。{'(初日は誰も噛み殺せません)' if Game.days == 0 else ''}",
                     view=(
-                        UserSelectView(Game.days, werewolfCallback)
+                        UserSelectView(
+                            Game.days,
+                            Game.scene,
+                            werewolfCallback,
+                            [
+                                discord.SelectOption(
+                                    label=member.member.display_name,
+                                    value=member.member.id,
+                                    description="このユーザーを噛み殺します",
+                                )
+                                for member in Game.members
+                                if member.role != Role.WEREWOLF and not member.dead
+                            ],
+                        )
                         if Game.days != 0
                         else None
                     ),
@@ -353,8 +462,9 @@ class WerewolfCog(commands.Cog):
                 if endType != EndType.NOTEND:
                     return await self.end(endType)
 
-                self.moveToLobby()
+                await self.moveToLobby()
                 Game.scene = Scene.DAY
+                Game.days += 1
                 await self.game()
 
     @commands.Cog.listener()
@@ -367,28 +477,30 @@ class WerewolfCog(commands.Cog):
 
         # 監視対象のボイスチャンネルへの接続
         if before.channel is None and after.channel is not None:
-            if after.channel.id == os.getenv("lobbyChannel"):
+            if after.channel.id == self.lobbyChannel.id:
                 if member not in Game.entries:
                     Game.entries.append(member)
 
         # 監視対象のボイスチャンネルからの切断
         elif before.channel is not None and after.channel is None:
-            if before.channel.id == os.getenv("lobbyChannel"):
-                if member in Game.entries:
+            if before.channel.id == self.lobbyChannel.id:
+                if member.id in [member.id for member in Game.entries]:
                     Game.entries.remove(member)
 
         # 監視対象のボイスチャンネルから別のチャンネルへの移動、またはその逆
         elif before.channel is not None and after.channel is not None:
             # 監視対象のチャンネルから別のチャンネルへ移動
-            if before.channel.id == os.getenv(
-                "lobbyChannel"
-            ) and after.channel.id != os.getenv("lobbyChannel"):
-                if member in Game.entries:
+            if (
+                before.channel.id == self.lobbyChannel.id
+                and after.channel.id != self.lobbyChannel.id
+            ):
+                if member.id in [member.id for member in Game.entries]:
                     Game.entries.remove(member)
             # 別のチャンネルから監視対象のチャンネルへ移動
-            elif before.channel.id != os.getenv(
-                "lobbyChannel"
-            ) and after.channel.id == os.getenv("lobbyChannel"):
+            elif (
+                before.channel.id != self.lobbyChannel.id
+                and after.channel.id == self.lobbyChannel.id
+            ):
                 if member not in Game.entries:
                     Game.entries.append(member)
 
@@ -443,7 +555,7 @@ class WerewolfCog(commands.Cog):
                 f"メンバーが足りません (あと{mCount - Game.entries}人)"
             )
 
-        # 役職ぎめ
+        # 役職決め
         for role, count in Game.cast.items():
             members = random.sample(Game.entries, count)
             for member in members:
@@ -470,9 +582,7 @@ class WerewolfCog(commands.Cog):
 
         # 人狼
         Game.channels.append(
-            channel := await self.bot.get_channel(
-                int(os.getenv("category"))
-            ).create_voice_channel(
+            channel := await self.category.create_voice_channel(
                 name="人狼",
                 overwrites={
                     interaction.guild.default_role: discord.PermissionOverwrite(
@@ -492,9 +602,7 @@ class WerewolfCog(commands.Cog):
 
         # 幽霊チャンネル
         Game.channels.append(
-            channel := await self.bot.get_channel(
-                int(os.getenv("category"))
-            ).create_text_channel(
+            channel := await self.category.create_text_channel(
                 name="霊界",
                 overwrites={
                     interaction.guild.default_role: discord.PermissionOverwrite(
@@ -508,10 +616,9 @@ class WerewolfCog(commands.Cog):
         # 各ユーザーのチャンネル
         for member in Game.members:
             dmember = member.member
+            await dmember.edit(mute=False)
             Game.channels.append(
-                channel := await self.bot.get_channel(
-                    int(os.getenv("category"))
-                ).create_voice_channel(
+                channel := await self.category.create_voice_channel(
                     name=str(dmember.id),
                     overwrites={
                         interaction.guild.default_role: discord.PermissionOverwrite(
