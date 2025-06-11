@@ -21,10 +21,10 @@ class Role(enum.Enum):
 
 
 # 陣営
-class RoleType(enum.Enum):
-    VILLAGER = "VILLAGER"  # 村人
-    WEREWOLF = "WEREWOLF"  # 人狼
-    OTHER = "OTHER"  # 第三陣営
+class RoleType(enum.IntEnum):
+    VILLAGER = 0  # 村人
+    WEREWOLF = 1  # 人狼
+    OTHER = 2  # 第三陣営
 
 
 # 役職 → 陣営 の対応表
@@ -71,7 +71,7 @@ class Member:
     member: discord.Member
     role: Role
     roleType: RoleType
-    dead: bool
+    dead: bool = False
 
 
 class Scene(enum.Enum):

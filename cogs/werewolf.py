@@ -42,7 +42,9 @@ ENDCHAR = {
 
 async def voteCallback(interaction: discord.Interaction, to: discord.Member):
     if to == interaction.user:
-        return await interaction.response.send_message(f"人狼は殺れません")
+        return await interaction.response.send_message(
+            f"自分自身には投票できません", ephemeral=True
+        )
     Game.votes[interaction.user] = to
     await interaction.response.send_message(
         f"{to.mention} に投票しました。", ephemeral=True
@@ -50,22 +52,20 @@ async def voteCallback(interaction: discord.Interaction, to: discord.Member):
 
 
 async def tellerCallback(interaction: discord.Interaction, to: discord.Member):
-    if to == interaction.user:
-        return await interaction.response.send_message(f"人狼は殺れません")
     Game.tellerTarget[interaction.user] = to
     await interaction.response.send_message(f"占う人を {to.mention} にしました。")
 
 
 async def knightCallback(interaction: discord.Interaction, to: discord.Member):
-    if to == interaction.user:
-        return await interaction.response.send_message(f"人狼は殺れません")
     Game.knightTarget[interaction.user] = to
     await interaction.response.send_message(f"守る人を {to.mention} にしました。")
 
 
 async def werewolfCallback(interaction: discord.Interaction, to: discord.Member):
     if discord.utils.get(Game.members, member=to).role == Role.WEREWOLF:
-        return await interaction.response.send_message(f"人狼は殺れません")
+        return await interaction.response.send_message(
+            f"人狼は殺れません", ephemeral=True
+        )
     Game.werewolfTarget = to
     await interaction.response.send_message(f"{to.mention} を殺ります")
 
@@ -132,6 +132,7 @@ class WerewolfCog(commands.Cog):
         self.werewolfChannel: discord.VoiceChannel = None
         self.ghostChannel: discord.TextChannel = None
         self.category: discord.CategoryChannel = None
+        self.countMessage: discord.Message = None
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -140,6 +141,9 @@ class WerewolfCog(commands.Cog):
         )
         self.lobbyChannel = self.bot.get_channel(int(os.getenv("lobbyChannel")))
         self.category = self.bot.get_channel(int(os.getenv("category")))
+
+        for member in self.lobbyChannel.members:
+            Game.entries.append(member)
 
     async def moveToRoleVoice(self):
         for member in Game.members:
@@ -154,6 +158,8 @@ class WerewolfCog(commands.Cog):
             except Exception as e:
                 traceback.print_exc()
                 await self.notificationChannel.send(f"エラーが発生しました: {e}")
+            finally:
+                await asyncio.sleep(0.05)
 
     async def moveToLobby(self):
         for member in Game.members:
@@ -163,18 +169,16 @@ class WerewolfCog(commands.Cog):
             except Exception as e:
                 traceback.print_exc()
                 await self.notificationChannel.send(f"エラーが発生しました: {e}")
+            finally:
+                await asyncio.sleep(0.05)
 
     async def addGhostMember(self, member: discord.Member):
         overwrites = self.ghostChannel.overwrites
         overwrites.update(
-            {member: discord.Permissions(view_channel=True, send_messages=True)}
+            {member: discord.PermissionOverwrite(view_channel=True, send_messages=True)}
         )
         await self.ghostChannel.edit(overwrites=overwrites)
-        try:
-            await member.edit(mute=True)
-        except Exception as e:
-            traceback.print_exc()
-            await self.notificationChannel.send(f"エラーが発生しました: {e}")
+        await member.edit(mute=True)
 
     def ifEnd(self):
         werewolf = len(
@@ -214,8 +218,9 @@ class WerewolfCog(commands.Cog):
 
         for member in Game.members:
             dmember = member.member
+            await dmember.edit(mute=False)
             if dmember.voice and dmember.voice.mute:
-                await dmember.edit(mute=False)
+                await dmember.move_to(self.lobbyChannel)
 
         await self.lobbyChannel.edit(
             overwrites={
@@ -236,15 +241,25 @@ class WerewolfCog(commands.Cog):
         match Game.scene:
             case Scene.DAY:
                 Game.seconds = 240
+                await self.moveToLobby()
+                self.countMessage = await self.notificationChannel.send(
+                    f"昼が終わるまで: 残り{Game.seconds}秒"
+                )
                 while Game.seconds > 0:
                     Game.seconds -= 1
                     await asyncio.sleep(1)
+                    await self.countMessage.edit(
+                        content=f"昼が終わるまで: 残り{Game.seconds}秒"
+                    )
                     if Game.force:
                         return await self.end(EndType.FORCE)
                 Game.scene = Scene.EVENING
                 await self.game()
             case Scene.EVENING:
                 Game.seconds = 60
+                self.countMessage = await self.notificationChannel.send(
+                    f"夕方が終わるまで: 残り{Game.seconds}秒"
+                )
 
                 for member in Game.members:
                     if not member.dead:
@@ -271,6 +286,9 @@ class WerewolfCog(commands.Cog):
                 while Game.seconds > 0:
                     Game.seconds -= 1
                     await asyncio.sleep(1)
+                    await self.countMessage.edit(
+                        content=f"夕方が終わるまで: 残り{Game.seconds}秒"
+                    )
                     if Game.force:
                         return await self.end(EndType.FORCE)
 
@@ -311,8 +329,7 @@ class WerewolfCog(commands.Cog):
                     char = ""
 
                 await self.notificationChannel.send(
-                    f"{voteMember.mention} さんが**{count}**票の投票を得たため、処刑します。"
-                    + char
+                    f"{voteMember.mention} さんが最多票を得たため、処刑します。" + char
                 )
                 discord.utils.get(Game.members, member=voteMember).dead = True
                 await self.addGhostMember(voteMember)
@@ -323,14 +340,13 @@ class WerewolfCog(commands.Cog):
                         await discord.utils.get(
                             Game.channels, name=str(dmember.id)
                         ).send(
-                            f"{voteMember.mention} さんは**{getRoleName(discord.utils.get(Game.members, member=voteMember).role)}**desita",
+                            f"{voteMember.mention} さんは**{getRoleName(discord.utils.get(Game.members, member=voteMember).role)}**でした。",
                         )
 
                 endType = self.ifEnd()
                 if endType != EndType.NOTEND:
                     return await self.end(endType)
 
-                await self.moveToRoleVoice()
                 Game.scene = Scene.NIGHT
                 await self.game()
             case Scene.NIGHT:
@@ -408,9 +424,16 @@ class WerewolfCog(commands.Cog):
                     ),
                 )
 
+                self.countMessage = await self.notificationChannel.send(
+                    f"夜が終わるまで: 残り{Game.seconds}秒"
+                )
+
                 while Game.seconds > 0:
                     Game.seconds -= 1
                     await asyncio.sleep(1)
+                    await self.countMessage.edit(
+                        content=f"夜が終わるまで: 残り{Game.seconds}秒"
+                    )
                     if Game.force:
                         return await self.end(EndType.FORCE)
 
@@ -446,13 +469,16 @@ class WerewolfCog(commands.Cog):
                     ).send(char)
 
                 # 騎士の処理(騎士が守れなかった場合は殺害処理)
-                if Game.werewolfTarget in Game.knightTarget.values():
-                    await self.notificationChannel.send("騎士が人狼から村人を守った！")
-                else:
-                    discord.utils.get(Game.members, member=Game.werewolfTarget).dead = (
-                        True
-                    )
-                    await self.addGhostMember(Game.werewolfTarget)
+                if Game.days > 0:
+                    if Game.werewolfTarget in Game.knightTarget.values():
+                        await self.notificationChannel.send(
+                            "騎士が人狼から村人を守った！"
+                        )
+                    else:
+                        discord.utils.get(
+                            Game.members, member=Game.werewolfTarget
+                        ).dead = True
+                        await self.addGhostMember(Game.werewolfTarget)
 
                 Game.werewolfTarget = None
                 Game.knightTarget = {}
@@ -462,7 +488,6 @@ class WerewolfCog(commands.Cog):
                 if endType != EndType.NOTEND:
                     return await self.end(endType)
 
-                await self.moveToLobby()
                 Game.scene = Scene.DAY
                 Game.days += 1
                 await self.game()
@@ -552,8 +577,10 @@ class WerewolfCog(commands.Cog):
 
         if mCount > len(Game.entries):
             return await interaction.response.send_message(
-                f"メンバーが足りません (あと{mCount - Game.entries}人)"
+                f"メンバーが足りません (あと{mCount - len(Game.entries)}人)"
             )
+
+        await interaction.response.send_message("ok", ephemeral=True)
 
         # 役職決め
         for role, count in Game.cast.items():
@@ -563,39 +590,58 @@ class WerewolfCog(commands.Cog):
                     Member(member=member, role=role, roleType=getRoleType(role))
                 )
                 Game.entries.remove(member)
+        entries = Game.entries.copy()
+        for member in entries:
+            Game.members.append(
+                Member(
+                    member=member,
+                    role=Role.VILLAGER,
+                    roleType=getRoleType(Role.VILLAGER),
+                )
+            )
+            Game.entries.remove(member)
         Game.members.sort(key=lambda m: m.roleType)
 
         # ロビー
-        await self.lobbyChannel.edit(
-            overwrites={
-                interaction.guild.default_role: discord.PermissionOverwrite(
-                    view_channel=False
-                ),
-            }
-            + {
+        overwrites = {
+            interaction.guild.default_role: discord.PermissionOverwrite(
+                view_channel=False
+            ),
+        }
+        overwrites.update(
+            {
                 member.member: discord.PermissionOverwrite(
                     view_channel=True, connect=True, speak=True, send_messages=True
                 )
                 for member in Game.members
-            },
+            }
+        )
+        await self.lobbyChannel.edit(
+            overwrites=overwrites,
         )
 
         # 人狼
+        overwrites = {
+            interaction.guild.default_role: discord.PermissionOverwrite(
+                view_channel=False
+            ),
+        }
+        overwrites.update(
+            {
+                member.member: discord.PermissionOverwrite(
+                    view_channel=True,
+                    connect=True,
+                    speak=True,
+                    send_messages=True,
+                )
+                for member in Game.members
+                if member.role == Role.WEREWOLF
+            }
+        )
         Game.channels.append(
             channel := await self.category.create_voice_channel(
                 name="人狼",
-                overwrites={
-                    interaction.guild.default_role: discord.PermissionOverwrite(
-                        view_channel=False
-                    ),
-                }
-                + {
-                    member.member: discord.PermissionOverwrite(
-                        view_channel=True, connect=True, speak=True, send_messages=True
-                    )
-                    for member in Game.members
-                    if member.role == Role.WEREWOLF
-                },
+                overwrites=overwrites,
             )
         )
         self.werewolfChannel = channel
