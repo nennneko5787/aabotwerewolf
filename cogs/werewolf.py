@@ -503,6 +503,8 @@ class WerewolfCog(commands.Cog):
         before: discord.VoiceState,
         after: discord.VoiceState,
     ):
+        if Game.inGame:
+            return
 
         # 監視対象のボイスチャンネルへの接続
         if before.channel is None and after.channel is not None:
@@ -570,11 +572,22 @@ class WerewolfCog(commands.Cog):
 
         await interaction.response.send_message("配役を決めました")
 
+    @app_commands.command(name="entries", description="エントリー中のメンバーを確認")
+    async def entriesCommand(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            " ".join([member.mention for member in Game.entries]), ephemeral=True
+        )
+
     @app_commands.command(name="game", description="ゲームを開始します")
     @app_commands.default_permissions(discord.Permissions(administrator=True))
     async def gameCommand(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             return
+
+        if len(Game.entries) <= 2:
+            return await interaction.response.send_message(
+                f"メンバーが足りません (あと{2 - len(Game.entries)}人)"
+            )
 
         # 役職の数が多すぎたとき
         mCount = sum(Game.cast.values())
@@ -690,6 +703,8 @@ class WerewolfCog(commands.Cog):
         )
 
         await self.notificationChannel.send("人狼ゲームを開始します。")
+
+        Game.inGame = True
         await self.game()
 
 
